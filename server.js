@@ -40,9 +40,10 @@ const evaluateGuess = async (guess, secret, current, other) => {
 const handleTurn = async (current, other, secret) => {
   await sendClientMsg(current, "YOUR_TURN");
   const input = await readLine(current);
-  if (input === null) return "End";
 
+  if (input === null) return "End";
   const guess = validateGuess(input);
+
   if (guess === null) {
     await sendClientMsg(current, "❌ Invalid Input");
     return "Retry";
@@ -58,8 +59,7 @@ const playGame = async (p1, p2, secret) => {
     const result = await handleTurn(current, other, secret);
 
     if (result === "Win" || result === "End") {
-      endGame(p1, p2);
-      return;
+      return endGame(p1, p2);
     }
 
     if (result === "Continue") {
@@ -78,30 +78,48 @@ const startGame = async (p1, p2) => {
   return playGame(p1, p2, secret);
 };
 
-const handleConnection = async (conn, players) => {
+const createHandler = (conn, players) => {
   players.push(conn);
   console.log("👤 Player connected");
 
-  if (players.length === 1) {
-    await sendClientMsg(conn, "👋 Welcome Player 1");
-    await sendClientMsg(conn, "⏳ Waiting For Player");
-  }
+  const handler = async () => {
+    if (players.length === 1) {
+      await sendClientMsg(conn, "👋 Welcome Player 1");
+      await sendClientMsg(conn, "⏳ Waiting For Player");
+    }
 
-  if (players.length === 2) {
-    await sendClientMsg(players[1], "👋 Welcome Player 2");
-    startGame(players[0], players[1]);
-  }
+    if (players.length === 2) {
+      const player1 = players.shift();
+      const player2 = players.shift();
+      await sendClientMsg(player2, "👋 Welcome Player 2");
+      startGame(player1, player2);
+    }
+  };
+
+  return handler;
 };
 
-const startServer = async () => {
+const handleConnections = async (server) => {
   const players = [];
 
-  const listener = Deno.listen({ port: 8080, transport: "tcp" });
-  console.log("🚀 Server running on port 8080");
-
-  for await (const conn of listener) {
-    handleConnection(conn, players);
+  for await (const conn of server) {
+    const handler = createHandler(conn, players);
+    handler();
   }
 };
 
-startServer();
+const startServer = (port) => {
+  const listener = Deno.listen({ port, transport: "tcp" });
+  console.log("🚀 Server running on port", port);
+
+  return listener;
+};
+
+const main = (args) => {
+  const [port = "8080"] = args;
+  const server = startServer(+port);
+
+  handleConnections(server);
+};
+
+main(Deno.args);

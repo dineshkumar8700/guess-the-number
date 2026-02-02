@@ -47,9 +47,16 @@ const handleClient = async (conn) => {
   }
 };
 
-const startClient = async () => {
-  const conn = await Deno.connect({ port: 8080, transport: "tcp" });
+const connectToServer = async (port) => {
+  const conn = await Deno.connect({ port, transport: "tcp" });
   console.log("✅ Connected to server");
+
+  return conn;
+};
+
+const main = async (args) => {
+  const [port = "8080"] = args;
+  const conn = await connectToServer(port);
 
   await handleClient(conn);
 
@@ -57,4 +64,4 @@ const startClient = async () => {
   console.log("🔌 Connection closed");
 };
 
-startClient();
+main(Deno.args);
