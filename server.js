@@ -1,125 +1,105 @@
+import { MessageType } from "./common.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-const sendClientMsg = async (conn, message) => {
-  await conn.write(encoder.encode(message + "\n"));
+const ResultType = {
+  LOW: "LOW",
+  HIGH: "HIGH",
+  WIN: "WIN",
+  LOSE: "LOSE",
 };
 
-const readLine = async (conn) => {
+const send = async (conn, payload) => {
+  await conn.write(encoder.encode(JSON.stringify(payload) + "\n"));
+};
+
+const read = async (conn) => {
   const buffer = new Uint8Array(1024);
-  const bytesRead = await conn.read(buffer);
-
-  if (bytesRead === null) return null;
-
-  return decoder.decode(buffer.subarray(0, bytesRead)).trim();
+  const bytes = await conn.read(buffer);
+  if (bytes === null) return null;
+  return decoder.decode(buffer.subarray(0, bytes)).trim();
 };
 
-const endGame = (p1, p2) => {
+const closeGame = (p1, p2) => {
   p1.close();
   p2.close();
-  console.log("🛑 Game finished");
+  console.log("🛑 Game ended");
 };
 
-const validateGuess = (input) => {
-  const guess = Number(input);
-  if (!Number.isInteger(guess)) return null;
-  return guess;
+const parseGuess = (input) => {
+  const value = Number(input);
+  return Number.isInteger(value) ? value : null;
 };
 
 const evaluateGuess = async (guess, secret, current, other) => {
   if (guess === secret) {
-    await sendClientMsg(current, "🎉 You Won");
-    await sendClientMsg(other, "😢 You Lost");
-    return "Win";
+    await send(current, { type: MessageType.RESULT, result: ResultType.WIN });
+    await send(other, { type: MessageType.RESULT, result: ResultType.LOSE });
+    return true;
   }
-  await sendClientMsg(current, guess < secret ? "⬇️ Too Low" : "⬆️ Too High");
 
-  return "Continue";
+  const result = guess < secret ? ResultType.LOW : ResultType.HIGH;
+  await send(current, { type: MessageType.RESULT, result });
+  return false;
 };
 
-const handleTurn = async (current, other, secret) => {
-  await sendClientMsg(current, "YOUR_TURN");
-  const input = await readLine(current);
+const playTurn = async (current, other, secret) => {
+  await send(current, { type: MessageType.YOUR_TURN });
 
-  if (input === null) return "End";
-  const guess = validateGuess(input);
+  const input = await read(current);
+  if (input === null) return true;
 
-  if (guess === null) {
-    await sendClientMsg(current, "❌ Invalid Input");
-    return "Retry";
-  }
+  const guess = parseGuess(input);
+  if (guess === null) return false;
 
   return evaluateGuess(guess, secret, current, other);
 };
 
-const playGame = async (p1, p2, secret) => {
-  let [current, other] = [p1, p2];
-
-  while (true) {
-    const result = await handleTurn(current, other, secret);
-
-    if (result === "Win" || result === "End") {
-      return endGame(p1, p2);
-    }
-
-    if (result === "Continue") {
-      [current, other] = [other, current];
-    }
-  }
-};
-
-const startGame = async (p1, p2) => {
+const startGame = async (player1, player2) => {
   const secret = Math.floor(Math.random() * 100) + 1;
   console.log("🔐 Secret:", secret);
 
-  await sendClientMsg(p1, "🎮 Game Started");
-  await sendClientMsg(p2, "🎮 Game Started");
+  await send(player1, { type: MessageType.START });
+  await send(player2, { type: MessageType.START });
 
-  return playGame(p1, p2, secret);
+  let current = player1;
+  let other = player2;
+
+  while (true) {
+    const finished = await playTurn(current, other, secret);
+    if (finished) return closeGame(player1, player2);
+    [current, other] = [other, current];
+  }
 };
 
-const createHandler = (conn, players) => {
-  players.push(conn);
-  console.log("👤 Player connected");
-
-  const handler = async () => {
-    if (players.length === 1) {
-      await sendClientMsg(conn, "👋 Welcome Player 1");
-      await sendClientMsg(conn, "⏳ Waiting For Player");
-    }
-
-    if (players.length === 2) {
-      const player1 = players.shift();
-      const player2 = players.shift();
-      await sendClientMsg(player2, "👋 Welcome Player 2");
-      startGame(player1, player2);
-    }
-  };
-
-  return handler;
-};
-
-const handleConnections = async (server) => {
-  const players = [];
+const handleServer = async (server) => {
+  const waitingQueue = [];
 
   for await (const conn of server) {
-    const handler = createHandler(conn, players);
-    handler();
+    console.log("👤 Player connected");
+    waitingQueue.push(conn);
+
+    await send(conn, { type: MessageType.WAITING });
+
+    if (waitingQueue.length >= 2) {
+      const p1 = waitingQueue.shift();
+      const p2 = waitingQueue.shift();
+      startGame(p1, p2);
+    }
   }
 };
 
 const startServer = (port) => {
-  const listener = Deno.listen({ port, transport: "tcp" });
-  console.log("🚀 Server running on port", port);
-
-  return listener;
+  const server = Deno.listen({ port, transport: "tcp" });
+  console.log("🚀 Server running on", port);
+  return server;
 };
 
 const main = (args) => {
   const [port = "8080"] = args;
   const server = startServer(+port);
-
-  handleConnections(server);
+  handleServer(server);
 };
 
 main(Deno.args);
